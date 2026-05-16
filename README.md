@@ -1,186 +1,254 @@
-# NAT funds — Indian Mutual Fund Analytics Platform
+# NAT Funds 📊
 
-A full-stack web app for discovering, analysing, and comparing Indian mutual funds using institutional-grade metrics — built from scratch with Node.js and vanilla JS.
+> A full-stack mutual fund analytics platform I built because I got tired of jumping between Tickertape, Value Research, and Groww just to compare a few funds properly.
 
----
-
-## What is this?
-
-I got frustrated trying to compare mutual funds on existing platforms. Most of them hide the good metrics behind a paywall, don't show you beta/alpha/sortino at all, or give you numbers without explaining what they mean. So I built my own.
-
-NAT funds pulls live NAV data from AMFI, fetches real TRI (Total Return Index) benchmark data directly from NSE/BSE, and computes ~15 risk-adjusted financial metrics locally — Sharpe Ratio, Sortino Ratio, Jensen's Alpha, Calmar Ratio, Upside/Downside Capture, R², Information Ratio, and a composite Consistency Score. Everything is calculated server-side with the actual math, not scraped from a third-party API.
+NAT Funds pulls live data from AMFI, NSE/BSE, and RBI, computes 12+ institutional-grade risk/return metrics from scratch, and serves everything through a clean REST API and a no-build-step SPA frontend. ~9,100 schemes. Zero paywalls.
 
 ---
 
-## Features
+## Why I built this
 
-- **Live AMFI data** — Fetches the full NAV universe (~9,000+ schemes) from `amfiindia.com` on every boot. Parses the bulk NAV text file, categorises every fund, and has the entire universe available in memory within seconds.
+Retail investors in India have surprisingly bad tooling. Most platforms either hide the good metrics behind a subscription or just show you the AMFI-published numbers without any context. I wanted to understand how Sharpe, Sortino, Beta, and Jensen's Alpha were actually calculated — not just displayed — so I built the whole thing myself, from parsing the AMFI NAV feed to writing a two-pass O(n) max drawdown scanner.
 
-- **Real TRI benchmarks** — Fetches actual Total Return Index time-series from NSE's Nifty Indices API and BSE's daily AllIndices CSV. Covers 100+ benchmark indices. BSE benchmarks with insufficient history are stitched with a correlated Nifty proxy (correlation > 0.97 for broad indices).
-
-- **Proper financial metrics** — Not scraped, actually computed:
-  - CAGR (1Y / 3Y / 5Y / Since Inception) with binary search date alignment and 7-day gap tolerance
-  - Rolling Returns (1Y daily-stepped, 3Y monthly-stepped with p10/p25/p75/p90 distribution)
-  - Sharpe and Sortino Ratio using live 91-day T-bill yield from CCIL India
-  - Beta, Jensen's Alpha, R² using 36-month aligned monthly returns against real TRI
-  - Max Drawdown with peak/trough/recovery dates
-  - Calmar Ratio (3Y CAGR ÷ Max Drawdown)
-  - Upside / Downside Capture Ratios (MorningStar standard, ≥10 up-months required)
-  - Information Ratio with geometric annualisation
-  - Composite Consistency Score (0–10) normalised within sub-category peers
-
-- **Smart caching** — Market-aware cache TTL. Cache is stale only if saved before the last AMFI NAV publish date (6 PM IST on the last business day). Stale cache fast-path serves data immediately while a background refresh runs — zero startup lag.
-
-- **Fund comparison** — Select 2–4 funds and compare them side-by-side. Rolling return distribution chart (Chart.js) shows the full distribution, not just averages.
-
-- **AMFI riskometer integration** — Official SEBI riskometer labels from AMFI's Fund Performance API are loaded daily and take priority over the calculated risk level. No chance of a Liquid fund being labelled "Very High" due to an edge case in the percentile logic.
-
-- **AUM, TER, IR, Benchmark data** — All pulled from AMFI. Fuzzy name matching with 4-level lookup cascade (exact → substring → space-collapsed → token overlap ≥ 0.75) handles the naming inconsistencies between AMFI's different APIs.
+The metrics in `services/metricsCalculator.js` (~1,200 lines, pure functions) are the real core of this project. Everything else is plumbing.
 
 ---
 
-## Tech Stack
+## What it does
 
-| Layer | Tech |
+**Browse** ~9,100 AMFI schemes across categories, filter by plan/option type, sort by any metric, paginate.
+
+**Compare** up to 4 funds side-by-side with a full breakdown across returns, risk, and benchmark-relative metrics.
+
+**Deep-dive** into any fund: rolling return distributions (1Y daily-step, 3Y monthly-step), drawdown timeline, upside/downside capture ratios, consistency score.
+
+**Search** live across scheme names and AMCs.
+
+---
+
+## Metrics computed
+
+| Category | What's in there |
 |---|---|
-| Backend | Node.js, Express |
-| Frontend | Vanilla JS (modular, no framework), Tailwind CSS (CDN), Chart.js |
-| Data sources | AMFI India, mfapi.in, NSE Nifty Indices, BSE India, CCIL India, RBI |
-| Caching | Filesystem (JSON + XLSX) |
-| Security | Helmet, express-rate-limit |
-| Scheduling | node-cron (daily AUM + TRI refresh at 09:30 IST) |
-| Logging | Pino |
+| Returns | CAGR 1Y / 3Y / 5Y / since inception, rolling return distributions |
+| Risk | Annualised Std Dev, Max Drawdown (peak → trough → recovery), SEBI Riskometer |
+| Risk-adjusted | Sharpe, Sortino, Calmar |
+| Benchmark-relative | Beta, Jensen's Alpha, Information Ratio, R², Upside/Downside Capture |
+| Fund metadata | AUM (₹ Cr), TER, Benchmark name, Plan type |
+| Peer scoring | Consistency Score (0–10, percentile-ranked within sub-category) |
+
+A few things worth noting on methodology:
+- **Sharpe/Sortino** use the live RBI 91-day T-bill YTM as the risk-free rate (fetched and cached daily), not a hardcoded 6%.
+- **Beta and Alpha** use real benchmark TRI history pulled from NSE/BSE — not approximate index price data.
+- **IDCW plans**: rolling returns reflect NAV movement only, matching Tickertape/INDmoney methodology (dividends paid out are not added back).
+- **Calmar** returns `null` if 3Y CAGR is unavailable or max drawdown is zero — no fake numbers.
 
 ---
 
-## Project Structure
+## Stack
+
+**Backend**: Node.js + Express  
+**Frontend**: Vanilla JS (ES modules, no bundler, no framework)  
+**Data**: AMFI NAV feed · mfapi.in · NSE/BSE Indices API · RBI CCIL · AMFI TER XLSX  
+**Caching**: Three-tier disk cache (persistent JSON stores + per-scheme NAV cache + computed fund list)  
+**Logging**: Pino structured logger  
+**Security**: Helmet, express-rate-limit (200 req/min/IP)
+
+---
+
+## Architecture at a glance
 
 ```
-.
-├── server.js                   # Express app, route mounting, process safety net
-├── boot/
-│   ├── startup.js              # Full boot sequence — 5-phase init with cache-aware fast paths
-│   └── dataHelpers.js          # TER/AUM/Benchmark/Riskometer enrichment helpers
-├── services/
-│   ├── amfiParser.js           # AMFI NAV bulk file parser + fund categorisation
-│   ├── dataFetcher.js          # mfapi.in NAV history, TER Excel parsing, cache management
-│   ├── metricsCalculator.js    # All financial metric calculations (1,191 lines of pure math)
-│   ├── fundPerformanceService.js # AUM, benchmarks, IR, riskometer from AMFI Fund Perf API
-│   ├── triService.js           # TRI time-series from NSE + BSE, BSE/Nifty proxy stitching
-│   └── riskFreeRate.js         # 91-day T-bill yield from CCIL India, weekly cached
-├── routes/
-│   ├── api.js                  # REST API handlers (/api/funds, /api/fund/:code, /api/compare, etc.)
-│   ├── admin.js                # Admin endpoints (secret-header gated)
-│   └── ter.js                  # TER data endpoint
+server.js                      ← Express setup, security headers, route mounting, boot trigger
+│
 ├── shared/
-│   ├── appState.js             # In-memory state (allFunds, fundsByCode, fundBenchmarkTRIs, etc.)
-│   └── logger.js               # Pino logger wrapper
-├── public/
-│   ├── index.html              # SPA shell, Tailwind config, layout
-│   ├── styles.css              # Custom CSS (spinners, glassmorphism, tooltips)
+│   ├── appState.js            ← Single source of truth for all in-memory state
+│   └── logger.js              ← Pino logger (level from LOG_LEVEL env)
+│
+├── boot/
+│   ├── startup.js             ← Full boot sequence: parse → fetch → compute
+│   └── dataHelpers.js         ← Per-fund enrichment (TER, AUM, AMFI IR, Benchmark, Riskometer)
+│
+├── routes/
+│   ├── api.js                 ← /api/* REST endpoints
+│   ├── admin.js               ← /admin/* sync endpoints (auth-protected)
+│   └── ter.js                 ← /ter/:schemeCode lookup
+│
+├── services/
+│   ├── amfiParser.js          ← Parses live AMFI NAV text feed; selects top funds
+│   ├── dataFetcher.js         ← NAV history from mfapi.in + disk cache
+│   ├── metricsCalculator.js   ← All metric math (~1,200 lines, pure functions)
+│   ├── fundPerformanceService.js ← AUM, Benchmark, AMFI IR, SEBI Riskometer
+│   ├── terService.js          ← TER from AMFI XLSX (ExcelJS)
+│   ├── triService.js          ← Benchmark TRI from NSE/BSE
+│   └── riskFreeRate.js        ← 91-day T-bill from RBI (24h cache)
+│
+├── data/                      ← Persistent JSON stores (committed)
+├── cache/                     ← Gitignored; auto-populated at runtime
+├── public/                    ← SPA (vanilla HTML + JS modules, no build step)
 │   └── js/
-│       ├── constants.js        # Metric labels, risk colours, sort options
-│       ├── state.js            # Frontend state (selected filters, compare basket)
-│       ├── api.js              # fetch() wrappers for all API endpoints
-│       ├── formatters.js       # Number/percentage/date formatters
-│       ├── router.js           # Hash-based SPA router (#/, #/explore, #/fund/:code, #/compare)
-│       ├── ui.js               # Shared UI helpers (tooltips, pagination, loading bar)
-│       ├── charts.js           # Chart.js wrappers for NAV history + rolling return charts
-│       ├── search.js           # Global search (debounced, dropdown)
-│       ├── compare.js          # Compare basket state (localStorage persisted)
-│       └── views/
-│           ├── home.js         # Dashboard view — category cards, top performers
-│           ├── explore.js      # Explore view — fund table with filters, sort, pagination
-│           ├── fund-detail.js  # Fund detail view — all metrics + NAV chart
-│           └── compare.js      # Compare view — side-by-side metric table + rolling charts
-└── data/
-    ├── aum-data.json           # Daily AUM index (normalised name → AUM in Cr.)
-    ├── benchmark-data.json     # Per-fund benchmark assignments (quarterly refresh)
-    ├── ir-data.json            # Information Ratios from AMFI
-    ├── riskometer-data.json    # SEBI riskometer labels from AMFI
-    └── tri-data.json           # TRI time-series (~14MB, all benchmark indices)
+│       ├── views/             ← home, explore, fund-detail, compare
+│       └── ...                ← state, api wrapper, formatters, router, charts
+├── tests/
+│   └── smoke.test.js          ← 9 smoke tests, ~0.5s, no network
+└── dev-tools/                 ← 19 diagnostic scripts, never imported by server
 ```
 
 ---
 
-## Getting Started
+## Caching strategy
+
+Cold boot on a fresh clone hits the network. After that, three cache tiers kick in:
+
+**`data/*.json`** — Persistent stores for TER, AUM, TRI, benchmarks, AMFI IR, riskometers. Committed to the repo. Refreshed by cron jobs and admin endpoints. Benchmark data has a 90-day TTL (SEBI mandates semi-permanent benchmark assignments), everything else is daily.
+
+**`cache/nav_<schemeCode>.json`** — Per-scheme NAV history from mfapi.in. 24-hour TTL. Git-ignored. Auto-populates on first fetch, fully rebuilt within 24h.
+
+**`cache/processed_funds.json`** — The full parsed+computed fund list with all metrics applied. 24-hour TTL. On a warm restart (< 24h), the server loads this directly and skips the entire parse → fetch → compute cycle. This is what makes restarts fast in production.
+
+**`cache/ter-parsed.json`** — Pre-parsed TER data. Avoids re-downloading the AMFI TER XLSX on every restart.
+
+---
+
+## Getting started
 
 ### Prerequisites
 - Node.js 18+
+- Internet access on first boot (fetches live AMFI data)
 
-### Setup
+### Install & run
+
 ```bash
-git clone <repo-url>
-cd "MF kj"
+git clone https://github.com/harleenkhanuja/NAT-Funds.git
+cd NAT-Funds
 npm install
+npm start        # production
+npm run dev      # development with nodemon
+npm test         # 9 smoke tests, ~0.5s, no network required
 ```
 
-Create a `.env` file:
+On first boot the server:
+1. Loads TER from `data/ter-data.json` (or syncs from AMFI if missing)
+2. Loads AUM, benchmarks, AMFI IR, riskometers from `data/` (or syncs if stale)
+3. Fetches the RBI risk-free rate
+4. Checks for a fresh `cache/processed_funds.json` — if < 24h old, loads it and skips 5–7
+5. Parses the live AMFI NAV feed (~9,100 schemes)
+6. Batch-fetches NAV history for top ~3,000 schemes (10 concurrent, disk-cached)
+7. Computes all metrics in memory, saves `processed_funds.json`
+8. Sets `dataReady = true` — starts serving the SPA
+
+The frontend shows a live progress bar (polling `/api/status`) during steps 5–7 so you're not staring at a blank screen.
+
+### Environment variables
+
 ```env
-PORT=3001
-# Optional
-ADMIN_SECRET=your_secret_here
-CORS_ORIGIN=
+PORT=3001              # HTTP port (default: 3001)
+ADMIN_SECRET=          # If set, /admin/* requires X-Admin-Secret header
+CORS_ORIGIN=           # Leave empty — frontend is served by this same server
+LOG_LEVEL=info         # Pino levels: trace | debug | info | warn | error | fatal
 ```
 
-### Run
+---
+
+## API reference
+
+### Public endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/status` | Server readiness + boot progress |
+| `GET` | `/api/categories` | Category/sub-category counts; `?planType=` + `?optionType=` |
+| `GET` | `/api/funds` | Paginated fund list with filtering + sorting |
+| `GET` | `/api/fund/:schemeCode` | Single fund detail with live NAV sync + on-the-fly metric recalc |
+| `GET` | `/api/fund/:schemeCode/nav-history` | Sampled monthly NAV for charting; `?period=1y|3y|5y|max` |
+| `GET` | `/api/compare?codes=...` | Side-by-side comparison for 2–4 scheme codes |
+| `GET` | `/api/search?q=...` | Full-text search across scheme name + AMC (top 20) |
+| `GET` | `/ter/:schemeCode` | TER lookup for a single scheme |
+
+Query params for `/api/funds`:
+
+| Param | Example | Notes |
+|---|---|---|
+| `type` | `Equity` | Filter by fund type |
+| `subCategory` | `Large Cap` | Comma-separated for multiple |
+| `planType` | `Direct` | `Direct` or `Regular` |
+| `optionType` | `Growth` | `Growth` or `IDCW` |
+| `search` | `HDFC` | Full-text across name + AMC |
+| `sortBy` | `cagr3y` | Supports nested objects |
+| `order` | `desc` | `asc` or `desc` |
+| `page` | `1` | 1-indexed |
+| `limit` | `20` | Max 100 |
+
+### Admin endpoints (require `X-Admin-Secret` header if env var is set)
+
+```
+GET /admin/sync-ter   → Re-download AMFI TER XLSX; rebuild ter-data.json
+GET /admin/sync-aum   → Refresh AUM + AMFI IR + Riskometer from AMFI Fund Performance API
+GET /admin/sync-tri   → Refresh all benchmark TRI histories from NSE/BSE
+```
+
+Cron schedule: TER at 09:00 IST, AUM at 09:30 IST, TRI at 09:31 IST.
+
+---
+
+## Data sources
+
+| Source | What I pull | Refresh cadence |
+|---|---|---|
+| `amfiindia.com` NAV text feed | Live NAV for ~9,100 schemes | On demand / boot |
+| mfapi.in | Per-scheme historical NAV (full history) | 24h disk cache per scheme |
+| AMFI Fund Performance API | AUM, fund→benchmark mapping, AMFI IR (1Y/3Y/5Y/10Y), SEBI Riskometer | Daily at 09:30 IST |
+| AMFI TER XLSX | Total Expense Ratio per scheme | Daily at 09:00 IST |
+| NSE / BSE Indices API | Benchmark TRI history | Daily at 09:31 IST |
+| CCIL India (RBI) | 91-day T-bill YTM (risk-free rate) | 24h cache, daily at boot |
+
+---
+
+## Dev tools & scripts
+
+`dev-tools/` has 19 standalone diagnostic scripts — safe to run at any time, never imported by the server.
+
 ```bash
-# Development (with nodemon auto-reload)
-npm run dev
-
-# Production
-npm start
+node dev-tools/test-api.js          # Basic API smoke test
+node dev-tools/test-metrics.js      # Metrics calculator unit checks
+node dev-tools/diagnose.js          # Data-coverage diagnostic report
+node dev-tools/test-benchmark.js    # TRI benchmark lookup check
 ```
 
-Open `http://localhost:3001`. On first boot it fetches live data from AMFI and computes metrics — this takes a couple of minutes. Subsequent boots load from cache and are instant.
+`scripts/` has data-quality audit tools for AUM normalisation:
+
+```bash
+node scripts/audit_aum_norm.js      # AUM match-rate audit across all 9,100+ funds
+node scripts/test_normalise.js      # Unit tests for normaliseName() + false-positive check
+```
+
+`dev-tools/app_original.js` is the original monolithic frontend (~88 KB) I started with. It's kept for reference — the live app loads exclusively from `public/js/` modules.
 
 ---
 
-## API Endpoints
+## A few things I learned building this
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/status` | Server readiness + loading progress |
-| `GET /api/categories` | Fund category/sub-category counts |
-| `GET /api/funds` | Paginated fund list with filtering and sorting |
-| `GET /api/fund/:schemeCode` | Single fund detail with all metrics |
-| `GET /api/fund/:schemeCode/nav-history` | Sampled NAV history for charting |
-| `GET /api/compare?codes=a,b,c` | Side-by-side comparison for 2–4 funds |
-| `GET /api/search?q=query` | Full-text search across scheme name + AMC |
+- Parsing the AMFI NAV text feed is deceptively annoying. The format uses `|`-delimited lines with category headers interspersed — you have to track state as you scan through it.
+- Getting Beta and Alpha right required pulling *Total Return Index* data from NSE/BSE, not just closing prices. Regular index prices don't account for dividends, so the benchmark return is understated.
+- The three-tier cache design was something I figured out after realising a cold boot was taking 3–4 minutes on a cheap VPS. Warm restarts now take under 5 seconds.
+- The Calmar Ratio edge cases were subtle — you can get a 0% max drawdown on some very short-history funds, which would cause a divide-by-zero. Returning `null` explicitly felt cleaner than returning `Infinity`.
 
 ---
 
-## How the metrics work
+## Notes
 
-A few things I spent a lot of time getting right:
-
-**CAGR date alignment** — Uses binary search to find the closest previous NAV (backward-looking only). If the gap to the target date is > 7 calendar days, the period returns null ("N.A.") rather than silently using a stale price.
-
-**Rolling returns** — 1Y uses daily stepping (standard). 3Y uses monthly stepping to avoid extreme autocorrelation. Beat-benchmark comparison requires ≤3 calendar day alignment between fund and TRI dates.
-
-**Sharpe / Sortino** — Uses live 91-day T-bill yield from CCIL India, geometrically compounded to monthly. Falls back to the last cached rate if the API is down; never falls back to a hardcoded constant.
-
-**Beta / Alpha / R²** — Computed against real TRI data (not NAV-of-index-fund as a proxy). This matters — using an index fund NAV introduces TER drag that biases Beta downward.
-
-**Risk level** — Within-category percentile ranking, not static thresholds. The most volatile fund in a subcategory is "Very High", the least is "Low". SEBI riskometer overrides this when available.
-
-**Consistency Score** — Composite 0–10 score normalised within sub-category peers. Weights: Median 3Y rolling return (30%), Rolling positive % (20%), Downside capture (20%), Sortino (20%), 3Y CAGR (10%).
+- No build step — the frontend is plain HTML + vanilla JS ES modules loaded in strict dependency order in `index.html`. No webpack, no Vite, no React.
+- All financial calculations are pure functions with no side effects. `metricsCalculator.js` can be imported and tested in isolation.
+- Rate limiting is set to 200 req/min/IP at the Express layer.
+- The `cache/` directory is git-ignored and auto-populates on first boot.
+- `data/*.json` files are committed so the app works immediately on clone without waiting for a full re-sync.
 
 ---
 
-## Data Sources
+## Tech used
 
-- **NAV data** — [AMFI India](https://www.amfiindia.com/spages/NAVAll.txt) (end-of-day, updated after 6 PM IST)
-- **Historical NAV history** — [mfapi.in](https://api.mfapi.in) (open source MF API)
-- **TRI benchmarks** — [NSE Nifty Indices API](https://niftyindices.com) + [BSE AllIndices CSV](https://www.bseindia.com)
-- **AUM / Riskometer / IR** — [AMFI Fund Performance API](https://www.amfiindia.com/gateway/pollingsebi/api/amfi/fundperformance)
-- **Risk-free rate** — [CCIL India](https://www.ccilindia.com/tenorwise-indicative-yields) (91-day T-bill YTM)
-- **TER data** — [AMFI TER API](https://www.amfiindia.com/api/populate-te-rdata-revised) (monthly Excel)
+`Node.js` · `Express` · `Axios` · `ExcelJS` · `node-cron` · `Helmet` · `Pino` · `Chart.js` (frontend) · `Vanilla JS ES Modules`
 
 ---
 
-## Disclaimer
-
-This is a personal project for learning and portfolio demonstration purposes. Not investment advice. NAV data is end-of-day, not real-time. Past performance does not guarantee future returns. Always read the scheme documents before investing.
-
----
+*Built by Harleen Khanuja*
