@@ -11,7 +11,7 @@
  ╚═╝  ╚═══╝╚═╝  ╚═╝   ╚═╝       ╚═╝      ╚═════╝ ╚═╝  ╚═══╝╚═════╝ ╚══════╝
 </pre>
 
-### Institutional-grade mutual fund analytics. For everyone.
+### Institutional-grade mutual fund analytics.
 
 <br/>
 
