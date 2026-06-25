@@ -339,9 +339,9 @@ Base URL: `http://localhost:3001/api`
 **Kaushik Jadhav**
 Data Analyst Intern
 
-📧 [your.email@example.com](mailto:your.email@example.com)
-🔗 [LinkedIn](https://linkedin.com/in/your-profile)
-🐙 [GitHub](https://github.com/your-username)
+📧 [your.email@example.com](kaushikjadhav77@gmail.com)
+🔗 [LinkedIn](https://www.linkedin.com/in/kaushik-jadhav-7a2a9b286)
+🐙 [GitHub](https://github.com/animorphixx-7)
 
 ---
 
